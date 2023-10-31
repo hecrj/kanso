@@ -6,3 +6,4 @@ license = "MIT"
 description = "A simple, append-only writing tool. Inspired by Ensō."
 
 [dependencies]
+iced = { git = "https://github.com/iced-rs/iced.git", features = ["advanced"] }
