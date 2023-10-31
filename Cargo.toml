@@ -1,0 +1,8 @@
+[package]
+name = "kanso"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+description = "A simple, append-only writing tool. Inspired by Ensō."
+
+[dependencies]
