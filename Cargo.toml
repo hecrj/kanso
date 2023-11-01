@@ -6,4 +6,7 @@ license = "MIT"
 description = "A simple, append-only writing tool. Inspired by Ensō."
 
 [dependencies]
-iced = { git = "https://github.com/iced-rs/iced.git", features = ["advanced"] }
+iced = { git = "https://github.com/iced-rs/iced.git", features = ["advanced", "tokio"] }
+
+thiserror = "1.0"
+tokio = { version = "1.33", features = ["fs", "time"] }

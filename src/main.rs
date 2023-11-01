@@ -1,45 +1,84 @@
+pub mod widget;
+
+use crate::widget::fade;
+
 use iced::event::{self, Event};
-use iced::executor;
 use iced::font::{self, Font};
 use iced::keyboard;
-use iced::widget::{container, text};
+use iced::widget::{column, container, row, text, text_input};
+use iced::window;
+use iced::{executor, Length};
 use iced::{Application, Command, Element, Settings, Subscription, Theme};
 
-use fade::fade;
+use std::env;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use thiserror::Error;
 
 fn main() -> iced::Result {
+    let filepath = env::args().skip(1).next();
+
     Kanso::run(Settings {
-        default_font: Font {
-            family: font::Family::Serif,
-            ..Font::DEFAULT
+        default_font: Font::MONOSPACE,
+        window: window::Settings {
+            min_size: Some((800, 800)),
+            ..window::Settings::default()
         },
-        ..Settings::default()
+        ..Settings::with_flags(Flags { filepath })
     })
 }
 
-struct Kanso {
-    text: String,
+enum Kanso {
+    Loading,
+    Creating {
+        filename: String,
+    },
+    Editing {
+        filepath: PathBuf,
+        content: String,
+        is_dirty: bool,
+    },
+    Errored {
+        error: Error,
+    },
+}
+
+struct Flags {
+    filepath: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    Append(char),
-    Backspace,
+    Loaded(Result<(PathBuf, Arc<String>), Error>),
+    FilenameChanged(String),
+    FilenameChosen,
+    Write(char),
+    Amend,
+    Save(usize),
+    Saved(Result<(), Error>),
 }
 
 impl Application for Kanso {
     type Theme = Theme;
     type Message = Message;
     type Executor = executor::Default;
-    type Flags = ();
+    type Flags = Flags;
 
-    fn new(_flags: Self::Flags) -> (Self, Command<Self::Message>) {
-        (
-            Kanso {
-                text: String::new(),
-            },
-            Command::none(),
-        )
+    fn new(flags: Self::Flags) -> (Self, Command<Self::Message>) {
+        if let Some(filepath) = flags.filepath {
+            (
+                Kanso::Loading,
+                Command::perform(load(filepath), Message::Loaded),
+            )
+        } else {
+            (
+                Kanso::Creating {
+                    filename: String::new(),
+                },
+                iced::widget::focus_next(),
+            )
+        }
     }
 
     fn title(&self) -> String {
@@ -48,13 +87,91 @@ impl Application for Kanso {
 
     fn update(&mut self, message: Message) -> Command<Self::Message> {
         match message {
-            Message::Append(character) => {
-                self.text.push(character);
+            Message::Loaded(Ok((filepath, content))) => {
+                *self = Self::Editing {
+                    filepath,
+                    content: (*content).clone(),
+                    is_dirty: false,
+                };
 
                 Command::none()
             }
-            Message::Backspace => {
-                self.text.pop();
+            Message::Loaded(Err(error)) => {
+                *self = Self::Errored { error };
+
+                Command::none()
+            }
+            Message::FilenameChanged(new_filename) => {
+                if let Self::Creating { filename } = self {
+                    *filename = new_filename;
+                }
+
+                Command::none()
+            }
+            Message::FilenameChosen => {
+                if let Self::Creating { filename } = self {
+                    *self = Self::Editing {
+                        filepath: PathBuf::from(filename.clone()),
+                        content: String::new(),
+                        is_dirty: true,
+                    };
+
+                    Command::perform(wait_a_bit(), |_| Message::Save(0))
+                } else {
+                    Command::none()
+                }
+            }
+            Message::Write(character) => {
+                if let Self::Editing {
+                    content, is_dirty, ..
+                } = self
+                {
+                    content.push(character);
+                    *is_dirty = true;
+
+                    Command::perform(wait_a_bit(), {
+                        let version = content.len();
+                        move |_| Message::Save(version)
+                    })
+                } else {
+                    Command::none()
+                }
+            }
+            Message::Amend => {
+                if let Self::Editing {
+                    content, is_dirty, ..
+                } = self
+                {
+                    content.pop();
+                    *is_dirty = true;
+
+                    Command::perform(wait_a_bit(), {
+                        let version = content.len();
+                        move |_| Message::Save(version)
+                    })
+                } else {
+                    Command::none()
+                }
+            }
+            Message::Save(version) => match self {
+                Self::Editing {
+                    filepath,
+                    content,
+                    is_dirty,
+                } if *is_dirty && content.len() == version => {
+                    Command::perform(save(filepath.clone(), content.clone()), Message::Saved)
+                }
+                _ => Command::none(),
+            },
+            Message::Saved(Ok(())) => {
+                if let Self::Editing { is_dirty, .. } = self {
+                    *is_dirty = false;
+                }
+
+                Command::none()
+            }
+            Message::Saved(Err(error)) => {
+                *self = Self::Errored { error };
 
                 Command::none()
             }
@@ -69,34 +186,65 @@ impl Application for Kanso {
 
             match event {
                 Event::Keyboard(keyboard::Event::CharacterReceived(character)) => {
-                    (!character.is_control()).then_some(Message::Append(character))
+                    (!character.is_control()).then_some(Message::Write(character))
                 }
                 Event::Keyboard(keyboard::Event::KeyPressed {
                     key_code: keyboard::KeyCode::Enter,
                     ..
-                }) => Some(Message::Append('\n')),
+                }) => Some(Message::Write('\n')),
                 Event::Keyboard(keyboard::Event::KeyPressed {
                     key_code: keyboard::KeyCode::Backspace,
                     ..
-                }) => Some(Message::Backspace),
+                }) => Some(Message::Amend),
                 _ => None,
             }
         })
     }
 
     fn view(&self) -> Element<'_, Message> {
-        fade(
-            container(
-                text(format!(
-                    "{}_",
-                    &self.text[self.text.len().saturating_sub(1_000)..]
-                ))
-                .size(40),
-            )
-            .width(700)
-            .padding(20),
-        )
-        .into()
+        match self {
+            Self::Loading => centered("Loading..."),
+            Self::Creating { filename } => centered(
+                text_input("Choose a filename", filename)
+                    .on_input(Message::FilenameChanged)
+                    .on_submit(Message::FilenameChosen)
+                    .width(700),
+            ),
+            Self::Editing {
+                filepath,
+                content,
+                is_dirty,
+            } => {
+                let writer = fade(
+                    container(
+                        text(format!(
+                            "{}_",
+                            &content[content.len().saturating_sub(1_000)..]
+                        ))
+                        .font(Font {
+                            family: font::Family::Serif,
+                            ..Font::DEFAULT
+                        })
+                        .size(40),
+                    )
+                    .width(700)
+                    .padding(20),
+                );
+
+                let status_bar = row![text(format!(
+                    "{}{}",
+                    filepath.as_path().to_str().unwrap_or(""),
+                    if *is_dirty { "*" } else { "" }
+                ))]
+                .padding(20);
+
+                container(column![writer, status_bar])
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            }
+            Self::Errored { error } => centered(text(error)),
+        }
     }
 
     fn theme(&self) -> Theme {
@@ -104,109 +252,41 @@ impl Application for Kanso {
     }
 }
 
-mod fade {
-    use iced::advanced;
-    use iced::advanced::layout::{self, Layout};
-    use iced::advanced::renderer;
-    use iced::advanced::widget::{self, Widget};
-    use iced::mouse;
-    use iced::{Element, Length, Rectangle, Size, Vector};
-
-    pub fn fade<'a, Message>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message>
-    where
-        Message: 'a,
-    {
-        Fade {
-            content: content.into(),
-        }
+fn centered<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x()
+        .center_y()
         .into()
-    }
+}
 
-    struct Fade<'a, Message, Renderer> {
-        content: Element<'a, Message, Renderer>,
-    }
+#[derive(Debug, Clone, Error)]
+enum Error {
+    #[error("input/output operation failed: {0}")]
+    IOFailed(io::ErrorKind),
+}
 
-    impl<'a, Message, Renderer> Widget<Message, Renderer> for Fade<'a, Message, Renderer>
-    where
-        Renderer: advanced::Renderer,
-    {
-        fn tag(&self) -> widget::tree::Tag {
-            self.content.as_widget().tag()
-        }
+async fn load(filepath: impl AsRef<Path>) -> Result<(PathBuf, Arc<String>), Error> {
+    let path = filepath.as_ref().to_path_buf();
 
-        fn state(&self) -> widget::tree::State {
-            self.content.as_widget().state()
-        }
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|error| error.kind())
+        .map_err(Error::IOFailed)?;
 
-        fn children(&self) -> Vec<widget::Tree> {
-            self.content.as_widget().children()
-        }
+    Ok((path, Arc::new(content)))
+}
 
-        fn diff(&self, tree: &mut widget::Tree) {
-            self.content.as_widget().diff(tree)
-        }
+async fn save(filepath: impl AsRef<Path>, content: String) -> Result<(), Error> {
+    tokio::fs::write(filepath, content)
+        .await
+        .map_err(|error| error.kind())
+        .map_err(Error::IOFailed)?;
 
-        fn width(&self) -> Length {
-            Length::Fill
-        }
+    Ok(())
+}
 
-        fn height(&self) -> Length {
-            Length::Fill
-        }
-
-        fn layout(
-            &self,
-            tree: &mut widget::Tree,
-            renderer: &Renderer,
-            limits: &layout::Limits,
-        ) -> layout::Node {
-            let size = limits.max();
-
-            let content_layout = self.content.as_widget().layout(
-                tree,
-                renderer,
-                &layout::Limits::new(Size::ZERO, Size::INFINITY),
-            );
-            let content_size = content_layout.size();
-
-            layout::Node::with_children(
-                size,
-                vec![content_layout.translate(Vector::new(
-                    (size.width - content_size.width) / 2.0,
-                    2.0 * size.height / 3.0 - content_size.height,
-                ))],
-            )
-        }
-
-        fn draw(
-            &self,
-            tree: &widget::Tree,
-            renderer: &mut Renderer,
-            theme: &<Renderer as advanced::Renderer>::Theme,
-            style: &renderer::Style,
-            layout: Layout<'_>,
-            cursor: mouse::Cursor,
-            viewport: &Rectangle,
-        ) {
-            self.content.as_widget().draw(
-                tree,
-                renderer,
-                theme,
-                style,
-                layout.children().next().unwrap(),
-                cursor,
-                viewport,
-            );
-        }
-    }
-
-    impl<'a, Message, Renderer> From<Fade<'a, Message, Renderer>> for Element<'a, Message, Renderer>
-    where
-        Message: 'a,
-        Renderer: advanced::Renderer + 'a,
-    {
-        fn from(fade: Fade<'a, Message, Renderer>) -> Self {
-            Element::new(fade)
-        }
-    }
+async fn wait_a_bit() {
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 }
