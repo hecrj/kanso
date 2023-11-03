@@ -5,7 +5,7 @@ use crate::widget::fade;
 use iced::event::{self, Event};
 use iced::font::{self, Font};
 use iced::keyboard;
-use iced::widget::{column, container, row, text, text_input};
+use iced::widget::{column, container, row, text};
 use iced::window;
 use iced::{executor, Length};
 use iced::{Application, Command, Element, Settings, Subscription, Theme};
@@ -17,7 +17,12 @@ use std::sync::Arc;
 use thiserror::Error;
 
 fn main() -> iced::Result {
-    let filepath = env::args().skip(1).next();
+    let Some(filepath) = env::args().skip(1).next() else {
+        println!("error: no filepath specified");
+        println!("usage: kanso <filepath>");
+
+        std::process::exit(1);
+    };
 
     Kanso::run(Settings {
         default_font: Font::MONOSPACE,
@@ -25,15 +30,14 @@ fn main() -> iced::Result {
             min_size: Some((800, 800)),
             ..window::Settings::default()
         },
-        ..Settings::with_flags(Flags { filepath })
+        ..Settings::with_flags(Flags {
+            filepath: PathBuf::from(filepath),
+        })
     })
 }
 
 enum Kanso {
     Loading,
-    Creating {
-        filename: String,
-    },
     Editing {
         filepath: PathBuf,
         content: String,
@@ -45,14 +49,12 @@ enum Kanso {
 }
 
 struct Flags {
-    filepath: Option<String>,
+    filepath: PathBuf,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     Loaded(Result<(PathBuf, Arc<String>), Error>),
-    FilenameChanged(String),
-    FilenameChosen,
     Write(char),
     Amend,
     Save(usize),
@@ -66,19 +68,10 @@ impl Application for Kanso {
     type Flags = Flags;
 
     fn new(flags: Self::Flags) -> (Self, Command<Self::Message>) {
-        if let Some(filepath) = flags.filepath {
-            (
-                Kanso::Loading,
-                Command::perform(load(filepath), Message::Loaded),
-            )
-        } else {
-            (
-                Kanso::Creating {
-                    filename: String::new(),
-                },
-                iced::widget::focus_next(),
-            )
-        }
+        (
+            Kanso::Loading,
+            Command::perform(load(flags.filepath), Message::Loaded),
+        )
     }
 
     fn title(&self) -> String {
@@ -100,26 +93,6 @@ impl Application for Kanso {
                 *self = Self::Errored { error };
 
                 Command::none()
-            }
-            Message::FilenameChanged(new_filename) => {
-                if let Self::Creating { filename } = self {
-                    *filename = new_filename;
-                }
-
-                Command::none()
-            }
-            Message::FilenameChosen => {
-                if let Self::Creating { filename } = self {
-                    *self = Self::Editing {
-                        filepath: PathBuf::from(filename.clone()),
-                        content: String::new(),
-                        is_dirty: true,
-                    };
-
-                    Command::perform(wait_a_bit(), |_| Message::Save(0))
-                } else {
-                    Command::none()
-                }
             }
             Message::Write(character) => {
                 if let Self::Editing {
@@ -204,12 +177,6 @@ impl Application for Kanso {
     fn view(&self) -> Element<'_, Message> {
         match self {
             Self::Loading => centered("Loading..."),
-            Self::Creating { filename } => centered(
-                text_input("Choose a filename", filename)
-                    .on_input(Message::FilenameChanged)
-                    .on_submit(Message::FilenameChosen)
-                    .width(700),
-            ),
             Self::Editing {
                 filepath,
                 content,
@@ -261,32 +228,38 @@ fn centered<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message
         .into()
 }
 
-#[derive(Debug, Clone, Error)]
-enum Error {
-    #[error("input/output operation failed: {0}")]
-    IOFailed(io::ErrorKind),
-}
-
 async fn load(filepath: impl AsRef<Path>) -> Result<(PathBuf, Arc<String>), Error> {
     let path = filepath.as_ref().to_path_buf();
 
-    let content = tokio::fs::read_to_string(&path)
-        .await
-        .map_err(|error| error.kind())
-        .map_err(Error::IOFailed)?;
+    let exists = tokio::fs::try_exists(filepath).await?;
+
+    let content = if exists {
+        tokio::fs::read_to_string(&path).await?
+    } else {
+        String::new()
+    };
 
     Ok((path, Arc::new(content)))
 }
 
 async fn save(filepath: impl AsRef<Path>, content: String) -> Result<(), Error> {
-    tokio::fs::write(filepath, content)
-        .await
-        .map_err(|error| error.kind())
-        .map_err(Error::IOFailed)?;
+    tokio::fs::write(filepath, content).await?;
 
     Ok(())
 }
 
 async fn wait_a_bit() {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+}
+
+#[derive(Debug, Clone, Error)]
+enum Error {
+    #[error("IO operation failed: {0}")]
+    IOFailed(io::ErrorKind),
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Self {
+        Self::IOFailed(error.kind())
+    }
 }
