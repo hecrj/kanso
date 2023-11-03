@@ -11,6 +11,7 @@ pub struct Writing {
     content: String,
     version: Version,
     last_save: Version,
+    original_word_count: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,11 +28,14 @@ impl Writing {
             String::new()
         };
 
+        let original_word_count = content.unicode_words().count() as u64;
+
         Ok(Self {
             filepath: path,
             content,
             version: Version(0),
             last_save: Version(0),
+            original_word_count,
         })
     }
 
@@ -64,8 +68,12 @@ impl Writing {
         self.version != self.last_save
     }
 
-    pub fn word_count(&self) -> usize {
-        self.content.unicode_words().count()
+    pub fn word_count(&self) -> u64 {
+        self.content.unicode_words().count() as u64
+    }
+
+    pub fn word_count_difference(&self) -> i64 {
+        self.word_count() as i64 - self.original_word_count as i64
     }
 
     pub fn write(&mut self, character: char) {

@@ -7,10 +7,11 @@ use crate::writing::Writing;
 use iced::event::{self, Event};
 use iced::font::{self, Font};
 use iced::keyboard;
+use iced::theme::{self, Theme};
 use iced::widget::{column, container, horizontal_space, row, text};
 use iced::window;
 use iced::{executor, Length};
-use iced::{Application, Command, Element, Settings, Subscription, Theme};
+use iced::{Application, Command, Element, Settings, Subscription};
 
 use std::env;
 use std::path::PathBuf;
@@ -165,16 +166,43 @@ impl Application for Kanso {
                     .padding(20),
                 );
 
-                let status_bar = row![
-                    text(format!(
-                        "{}{}",
-                        writing.filepath().to_str().unwrap_or(""),
-                        if writing.is_dirty() { "*" } else { "" }
-                    )),
-                    horizontal_space(Length::Fill),
-                    text(format!("{}", writing.word_count()))
-                ]
-                .padding(20);
+                let status_bar = {
+                    let word_count_difference = {
+                        let difference = writing.word_count_difference();
+
+                        text(format!(
+                            "{}{}",
+                            if difference > 0 { "+" } else { "" },
+                            difference
+                        ))
+                        .style({
+                            let palette = Theme::Dark.extended_palette();
+
+                            if difference == 0 {
+                                theme::Text::Default
+                            } else {
+                                theme::Text::Color(if difference > 0 {
+                                    palette.success.strong.color
+                                } else {
+                                    palette.danger.base.color
+                                })
+                            }
+                        })
+                    };
+
+                    row![
+                        text(format!(
+                            "{}{}",
+                            writing.filepath().to_str().unwrap_or(""),
+                            if writing.is_dirty() { "*" } else { "" }
+                        )),
+                        horizontal_space(Length::Fill),
+                        text(format!("{}", writing.word_count())),
+                        word_count_difference,
+                    ]
+                    .spacing(10)
+                    .padding(20)
+                };
 
                 container(column![writer, status_bar])
                     .width(Length::Fill)
