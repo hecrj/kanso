@@ -7,7 +7,7 @@ use crate::writing::Writing;
 use iced::event::{self, Event};
 use iced::font::{self, Font};
 use iced::keyboard;
-use iced::widget::{column, container, row, text};
+use iced::widget::{column, container, horizontal_space, row, text};
 use iced::window;
 use iced::{executor, Length};
 use iced::{Application, Command, Element, Settings, Subscription, Theme};
@@ -165,11 +165,15 @@ impl Application for Kanso {
                     .padding(20),
                 );
 
-                let status_bar = row![text(format!(
-                    "{}{}",
-                    writing.filepath().to_str().unwrap_or(""),
-                    if writing.is_dirty() { "*" } else { "" }
-                ))]
+                let status_bar = row![
+                    text(format!(
+                        "{}{}",
+                        writing.filepath().to_str().unwrap_or(""),
+                        if writing.is_dirty() { "*" } else { "" }
+                    )),
+                    horizontal_space(Length::Fill),
+                    text(format!("{}", writing.word_count()))
+                ]
                 .padding(20);
 
                 container(column![writer, status_bar])

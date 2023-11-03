@@ -3,6 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Writing {
@@ -61,6 +62,10 @@ impl Writing {
 
     pub fn is_dirty(&self) -> bool {
         self.version != self.last_save
+    }
+
+    pub fn word_count(&self) -> usize {
+        self.content.unicode_words().count()
     }
 
     pub fn write(&mut self, character: char) {

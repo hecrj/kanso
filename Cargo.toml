@@ -10,3 +10,4 @@ iced = { git = "https://github.com/iced-rs/iced.git", features = ["advanced", "t
 
 thiserror = "1.0"
 tokio = { version = "1.33", features = ["fs", "time"] }
+unicode-segmentation = "1.10"
