@@ -201,7 +201,7 @@ impl Application for Kanso {
                         word_count_difference,
                     ]
                     .spacing(10)
-                    .padding(20)
+                    .padding(10)
                 };
 
                 container(column![writer, status_bar])
